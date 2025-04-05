@@ -1,0 +1,45 @@
+{
+  "name": "kabu.wrench-panel",
+  "displayName": "Wrench Panel",
+  "description": "This extension displays the string data of geometry_msgs/Wrench.msg or geometry_msgs/msg/Wrench.msg on the panel.",
+  "publisher": "Ryo Kabutan",
+  "homepage": "https://github.com/Ry0/foxglove-wrench-panel",
+  "version": "1.0.0",
+  "license": "MIT",
+  "main": "./dist/extension.js",
+  "keywords": [
+    "foxglove",
+    "ros",
+    "string"
+  ],
+  "scripts": {
+    "build": "foxglove-extension build",
+    "foxglove:prepublish": "foxglove-extension build --mode production",
+    "lint": "eslint .",
+    "lint:ci": "eslint .",
+    "lint:fix": "eslint --fix .",
+    "local-install": "foxglove-extension install",
+    "package": "foxglove-extension package",
+    "pretest": "foxglove-extension pretest"
+  },
+  "devDependencies": {
+    "@foxglove/eslint-plugin": "2.0.0",
+    "@foxglove/extension": "2.22.0",
+    "@microlink/react-json-view": "1.26.1",
+    "@types/react": "18.3.18",
+    "@types/react-dom": "18.3.5",
+    "@types/three": "^0.175.0",
+    "create-foxglove-extension": "1.0.4",
+    "eslint": "9.21.0",
+    "immer": "10.1.1",
+    "lodash": "4.17.21",
+    "prettier": "3.5.3",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "three": "^0.175.0",
+    "typescript": "5.8.2"
+  },
+  "dependencies": {
+    "@foxglove/schemas": "^1.6.6"
+  }
+}
