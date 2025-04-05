@@ -6,6 +6,8 @@ import { set } from "lodash";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 
+THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
+
 // Wrench message type definition
 interface Vector3 {
   x: number;
@@ -137,6 +139,7 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
 
     // Add grid
     const gridHelper = new THREE.GridHelper(10, 10);
+    gridHelper.rotation.x = Math.PI / 2; // X軸まわりに90度回転
     gridHelper.visible = state.display.gridVisible;
     scene.add(gridHelper);
 
