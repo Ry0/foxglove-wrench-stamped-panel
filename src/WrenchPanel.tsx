@@ -8,19 +8,60 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 
-// Wrench message type definition
+// Header definition for stamped messages
+interface Header {
+  frame_id: string;
+  stamp: { sec: number; nsec: number };
+}
+
+// Vector3 type definition
 interface Vector3 {
   x: number;
   y: number;
   z: number;
 }
 
-interface WrenchMessage {
-  force: Vector3;
-  torque: Vector3;
+// WrenchStamped message type definition
+interface WrenchStampedMessage {
+  header: Header;
+  wrench: {
+    force: Vector3;
+    torque: Vector3;
+  };
 }
 
-type WrenchMessageEvent = MessageEvent<WrenchMessage>;
+// TF message type definition
+interface Transform {
+  translation: Vector3;
+  rotation: {
+    x: number;
+    y: number;
+    z: number;
+    w: number;
+  };
+}
+
+interface TransformStamped {
+  header: Header;
+  child_frame_id: string;
+  transform: Transform;
+}
+
+interface TFMessage {
+  transforms: TransformStamped[];
+}
+
+// Message event types
+type WrenchStampedMessageEvent = MessageEvent<WrenchStampedMessage>;
+type TFMessageEvent = MessageEvent<TFMessage>;
+
+// TF Tree structure for frame transformation
+interface TFTreeNode {
+  frame_id: string;
+  parent_frame_id?: string;
+  transform: Transform;
+  timestamp: number; // For freshness check
+}
 
 // Panel state definition
 type PanelState = {
@@ -28,6 +69,7 @@ type PanelState = {
     label: string;
     topic?: string;
     visible: boolean;
+    fixedFrame: string;
   };
   display: {
     showForce: boolean;
@@ -43,7 +85,10 @@ type PanelState = {
 
 function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Element {
   const [topics, setTopics] = useState<readonly Topic[] | undefined>();
-  const [message, setMessage] = useState<WrenchMessageEvent>();
+  const [message, setMessage] = useState<WrenchStampedMessageEvent>();
+  // const [tfMessages, setTfMessages] = useState<TFMessageEvent[]>([]);
+  const [sensorFrameId, setSensorFrameId] = useState<string>("");
+  const [tfTree, setTfTree] = useState<Map<string, TFTreeNode>>(new Map());
   const [renderDone, setRenderDone] = useState<(() => void) | undefined>();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -52,6 +97,7 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
   const controlsRef = useRef<OrbitControls | null>(null);
   const forceArrowRef = useRef<THREE.ArrowHelper | null>(null);
   const torqueArrowRef = useRef<THREE.ArrowHelper | null>(null);
+  const sensorGroupRef = useRef<THREE.Group | null>(null);
   const animationFrameRef = useRef<number>(0);
 
   // Restore state from layout
@@ -62,6 +108,7 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
         label: initialState?.data?.label ?? "Wrench Visualization",
         topic: initialState?.data?.topic,
         visible: initialState?.data?.visible ?? true,
+        fixedFrame: initialState?.data?.fixedFrame ?? "world",
       },
       display: {
         showForce: initialState?.display?.showForce ?? true,
@@ -76,14 +123,45 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
     };
   });
 
-  // Filter topics for Wrench message type
-  const wrenchTopics = useMemo(
+  // Filter topics for WrenchStamped message type only
+  const wrenchStampedTopics = useMemo(
     () => (topics ?? []).filter((topic) =>
-      topic.schemaName === "geometry_msgs/msg/Wrench" || 
-      topic.schemaName === "geometry_msgs/Wrench"
+      topic.schemaName === "geometry_msgs/msg/WrenchStamped" ||
+      topic.schemaName === "geometry_msgs/WrenchStamped"
     ),
     [topics],
   );
+
+  // Filter topics for TF message types
+  const tfTopics = useMemo(
+    () => (topics ?? []).filter((topic) =>
+      topic.schemaName === "tf2_msgs/msg/TFMessage" || 
+      topic.schemaName === "tf2_msgs/TFMessage" ||
+      topic.schemaName === "tf/tfMessage"
+    ),
+    [topics],
+  );
+
+  // Extract available frames from TF messages
+  const availableFrames = useMemo(() => {
+    const frames = new Set<string>();
+    frames.add(state.data.fixedFrame); // Add fixed frame
+
+    // Add frames from TF tree
+    tfTree.forEach((node) => {
+      frames.add(node.frame_id);
+      if (node.parent_frame_id) {
+        frames.add(node.parent_frame_id);
+      }
+    });
+
+    // Add sensor frame if available
+    if (sensorFrameId) {
+      frames.add(sensorFrameId);
+    }
+
+    return Array.from(frames).sort();
+  }, [tfTree, state.data.fixedFrame, sensorFrameId]);
 
   // Handle settings actions
   const actionHandler = useCallback(
@@ -100,6 +178,171 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
     },
     [context],
   );
+
+  // Helper function to update TF tree with new transform information
+  const updateTFTree = useCallback((newTfMessages: TFMessageEvent[]) => {
+    setTfTree(prevTree => {
+      const newTree = new Map(prevTree);
+      
+      newTfMessages.forEach(tfMsg => {
+        tfMsg.message.transforms.forEach(transform => {
+          const parentFrame = transform.header.frame_id;
+          const childFrame = transform.child_frame_id;
+          const timestamp = transform.header.stamp.sec * 1e9 + transform.header.stamp.nsec;
+
+          // Add or update child frame node
+          newTree.set(childFrame, {
+            frame_id: childFrame,
+            parent_frame_id: parentFrame,
+            transform: transform.transform,
+            timestamp
+          });
+          
+          // Ensure parent frame exists (might not have a parent itself yet)
+          if (!newTree.has(parentFrame)) {
+            newTree.set(parentFrame, {
+              frame_id: parentFrame,
+              transform: { 
+                translation: { x: 0, y: 0, z: 0 }, 
+                rotation: { x: 0, y: 0, z: 0, w: 1 } 
+              },
+              timestamp
+            });
+          }
+        });
+      });
+      
+      return newTree;
+    });
+  }, []);
+
+  // Find transform path between two frames
+  const findTransformPath = useCallback((sourceFrame: string, targetFrame: string): string[] => {
+    if (sourceFrame === targetFrame) {
+      return [sourceFrame];
+    }
+    
+    // Simple BFS to find path
+    const visited = new Set<string>();
+    const queue: { frame: string; path: string[] }[] = [{ frame: sourceFrame, path: [sourceFrame] }];
+    
+    while (queue.length > 0) {
+      const { frame, path } = queue.shift()!;
+      
+      if (frame === targetFrame) {
+        return path;
+      }
+      
+      if (visited.has(frame)) {
+        continue;
+      }
+      
+      visited.add(frame);
+      
+      // Find all connected frames (children and parents)
+      tfTree.forEach((node, nodeFrameId) => {
+        // Check if this node is a child of current frame
+        if (node.parent_frame_id === frame && !visited.has(nodeFrameId)) {
+          queue.push({ frame: nodeFrameId, path: [...path, nodeFrameId] });
+        }
+        
+        // Check if this node is a parent of current frame
+        if (nodeFrameId === node.parent_frame_id && node.frame_id === frame && !visited.has(nodeFrameId)) {
+          queue.push({ frame: nodeFrameId, path: [...path, nodeFrameId] });
+        }
+      });
+    }
+    
+    return []; // No path found
+  }, [tfTree]);
+
+  // Compute transform between two frames by walking the transform tree
+  const computeTransform = useCallback((sourceFrame: string, targetFrame: string): Transform | null => {
+    if (sourceFrame === targetFrame) {
+      return {
+        translation: { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0, w: 1 }
+      };
+    }
+    
+    // Find path between frames
+    const path = findTransformPath(sourceFrame, targetFrame);
+    
+    if (path.length < 2) {
+      return null; // No path found
+    }
+    
+    // Initialize with identity transform
+    let resultTransform = new THREE.Matrix4().identity();
+    
+    // Walk through the path applying transforms
+    for (let i = 0; i < path.length - 1; i++) {
+      const fromFrame = path[i];
+      const toFrame = path[i + 1];
+      
+      // Get the transform
+      let transform: Transform | null = null;
+      let inverse = false;
+      
+      // Check direct transform
+      const toNode = tfTree.get(toFrame!);
+      if (toNode && toNode.parent_frame_id === fromFrame) {
+        transform = toNode.transform;
+        inverse = false;
+      } else {
+        // Check inverse transform
+        const fromNode = tfTree.get(fromFrame!);
+        if (fromNode && fromNode.parent_frame_id === toFrame) {
+          transform = fromNode.transform;
+          inverse = true;
+        }
+      }
+      
+      if (!transform) {
+        return null; // Missing transform in path
+      }
+      
+      // Convert to THREE.js objects
+      const translation = new THREE.Vector3(
+        transform.translation.x,
+        transform.translation.y,
+        transform.translation.z
+      );
+      const rotation = new THREE.Quaternion(
+        transform.rotation.x,
+        transform.rotation.y,
+        transform.rotation.z,
+        transform.rotation.w
+      );
+      
+      // Create transform matrix
+      const mat = new THREE.Matrix4().compose(
+        translation,
+        rotation,
+        new THREE.Vector3(1, 1, 1)
+      );
+      
+      // Apply inverse if needed
+      if (inverse) {
+        mat.invert();
+      }
+      
+      // Multiply into result
+      resultTransform.multiply(mat);
+    }
+    
+    // Extract final translation and rotation
+    const position = new THREE.Vector3();
+    const quaternion = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    
+    resultTransform.decompose(position, quaternion, scale);
+    
+    return {
+      translation: { x: position.x, y: position.y, z: position.z },
+      rotation: { x: quaternion.x, y: quaternion.y, z: quaternion.z, w: quaternion.w }
+    };
+  }, [tfTree, findTransformPath]);
 
   // Setup Three.js scene
   const setupScene = useCallback(() => {
@@ -148,6 +391,11 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
     axesHelper.visible = state.display.axesVisible;
     scene.add(axesHelper);
 
+    // Create sensor group
+    const sensorGroup = new THREE.Group();
+    scene.add(sensorGroup);
+    sensorGroupRef.current = sensorGroup;
+
     // Create force arrow (initial)
     const forceArrow = new THREE.ArrowHelper(
       new THREE.Vector3(1, 0, 0),
@@ -158,7 +406,7 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
       0.1
     );
     forceArrow.visible = state.display.showForce;
-    scene.add(forceArrow);
+    sensorGroup.add(forceArrow);
     forceArrowRef.current = forceArrow;
 
     // Create torque arrow (initial)
@@ -171,55 +419,78 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
       0.1
     );
     torqueArrow.visible = state.display.showTorque;
-    scene.add(torqueArrow);
+    sensorGroup.add(torqueArrow);
     torqueArrowRef.current = torqueArrow;
+
+    // Add a small coordinate axes at sensor position
+    const sensorAxes = new THREE.AxesHelper(0.3);
+    sensorGroup.add(sensorAxes);
 
     // Animation loop
     const animate = () => {
       animationFrameRef.current = requestAnimationFrame(animate);
-      controls.update();
-      renderer.render(scene, camera);
+      if (controlsRef.current) {
+        controlsRef.current.update();
+      }
+      if (rendererRef.current && sceneRef.current && cameraRef.current) {
+        rendererRef.current.render(sceneRef.current, cameraRef.current);
+      }
     };
     animate();
   }, [state.display.gridVisible, state.display.axesVisible, state.display.showForce, state.display.showTorque, state.display.forceColor, state.display.torqueColor]);
 
+  // Update sensor position based on TF data
+  const updateSensorPosition = useCallback(() => {
+    if (!sensorGroupRef.current || !sensorFrameId || sensorFrameId === state.data.fixedFrame) {
+      return;
+    }
+
+    const transform = computeTransform(state.data.fixedFrame, sensorFrameId);
+    if (transform) {
+      const { translation, rotation } = transform;
+      
+      // Update position
+      sensorGroupRef.current.position.set(translation.x, translation.y, translation.z);
+      
+      // Update rotation
+      const quaternion = new THREE.Quaternion(rotation.x, rotation.y, rotation.z, rotation.w);
+      sensorGroupRef.current.quaternion.copy(quaternion);
+    }
+  }, [sensorFrameId, state.data.fixedFrame, computeTransform]);
+
   // Update arrows based on message
   const updateArrows = useCallback(() => {
-    if (!sceneRef.current || !message) return;
+    if (!forceArrowRef.current || !torqueArrowRef.current || !message) return;
 
-    const { force, torque } = message.message;
+    const { force, torque } = message.message.wrench;
     
     // Update force arrow
-    if (forceArrowRef.current) {
-      const forceVector = new THREE.Vector3(force.x, force.y, force.z);
-      const forceLength = forceVector.length();
-      if (forceLength > 0) {
-        forceVector.normalize();
-        forceArrowRef.current.setDirection(forceVector);
-        forceArrowRef.current.setLength(
-          forceLength * state.display.forceScaleFactor,
-          forceLength * state.display.forceScaleFactor * 0.2,
-          forceLength * state.display.forceScaleFactor * 0.1
-        );
-      }
-      forceArrowRef.current.visible = state.display.showForce;
+    const forceVector = new THREE.Vector3(force.x, force.y, force.z);
+    const forceLength = forceVector.length();
+    if (forceLength > 0) {
+      forceVector.normalize();
+      forceArrowRef.current.setDirection(forceVector);
+      forceArrowRef.current.setLength(
+        forceLength * state.display.forceScaleFactor,
+        forceLength * state.display.forceScaleFactor * 0.2,
+        forceLength * state.display.forceScaleFactor * 0.1
+      );
     }
-
+    forceArrowRef.current.visible = state.display.showForce;
+    
     // Update torque arrow
-    if (torqueArrowRef.current) {
-      const torqueVector = new THREE.Vector3(torque.x, torque.y, torque.z);
-      const torqueLength = torqueVector.length();
-      if (torqueLength > 0) {
-        torqueVector.normalize();
-        torqueArrowRef.current.setDirection(torqueVector);
-        torqueArrowRef.current.setLength(
-          torqueLength * state.display.torqueScaleFactor,
-          torqueLength * state.display.torqueScaleFactor * 0.2,
-          torqueLength * state.display.torqueScaleFactor * 0.1
-        );
-      }
-      torqueArrowRef.current.visible = state.display.showTorque;
+    const torqueVector = new THREE.Vector3(torque.x, torque.y, torque.z);
+    const torqueLength = torqueVector.length();
+    if (torqueLength > 0) {
+      torqueVector.normalize();
+      torqueArrowRef.current.setDirection(torqueVector);
+      torqueArrowRef.current.setLength(
+        torqueLength * state.display.torqueScaleFactor,
+        torqueLength * state.display.torqueScaleFactor * 0.2,
+        torqueLength * state.display.torqueScaleFactor * 0.1
+      );
     }
+    torqueArrowRef.current.visible = state.display.showTorque;
   }, [message, state.display.showForce, state.display.showTorque, state.display.forceScaleFactor, state.display.torqueScaleFactor]);
 
   // Resize handler
@@ -238,7 +509,8 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
   useEffect(() => {
     context.saveState(state);
 
-    const topicOptions = wrenchTopics.map((topic) => ({ value: topic.name, label: topic.name }));
+    const topicOptions = wrenchStampedTopics.map((topic) => ({ value: topic.name, label: topic.name }));
+    const frameOptions = availableFrames.map((frame) => ({ value: frame, label: frame }));
 
     context.updatePanelSettingsEditor({
       actionHandler,
@@ -254,6 +526,12 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
               input: "select",
               options: topicOptions,
               value: state.data.topic,
+            },
+            fixedFrame: {
+              label: "Fixed Frame",
+              input: "select",
+              options: frameOptions,
+              value: state.data.fixedFrame,
             },
           },
         },
@@ -311,7 +589,7 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
         },
       },
     });
-  }, [context, actionHandler, state, wrenchTopics]);
+  }, [context, actionHandler, state, wrenchStampedTopics, availableFrames]);
 
   // Initialize Three.js
   useEffect(() => {
@@ -334,6 +612,11 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
     updateArrows();
   }, [updateArrows]);
 
+  // Update sensor position when TF data or sensor frame changes
+  useEffect(() => {
+    updateSensorPosition();
+  }, [updateSensorPosition]);
+
   // Update grid and axes visibility
   useEffect(() => {
     if (!sceneRef.current) return;
@@ -348,21 +631,33 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
     });
   }, [state.display.gridVisible, state.display.axesVisible]);
 
-  // Subscribe to topic
+  // Subscribe to topics
   useEffect(() => {
+    const subscriptions = [];
+    
+    // Subscribe to wrench topic if selected
     if (state.data.topic) {
-      context.subscribe([{ topic: state.data.topic }]);
+      subscriptions.push({ topic: state.data.topic });
     }
-  }, [context, state.data.topic]);
+    
+    // Subscribe to TF topics
+    tfTopics.forEach(topic => {
+      subscriptions.push({ topic: topic.name });
+    });
+    
+    if (subscriptions.length > 0) {
+      context.subscribe(subscriptions);
+    }
+  }, [context, state.data.topic, tfTopics]);
 
   // Select default topic
   useEffect(() => {
-    if (state.data.topic == undefined && wrenchTopics.length > 0) {
+    if (state.data.topic === undefined && wrenchStampedTopics.length > 0) {
       setState(produce((draft) => {
-        draft.data.topic = wrenchTopics[0]?.name;
+        draft.data.topic = wrenchStampedTopics[0]?.name;
       }));
     }
-  }, [state.data.topic, wrenchTopics]);
+  }, [state.data.topic, wrenchStampedTopics]);
 
   // Setup render callback
   useLayoutEffect(() => {
@@ -371,35 +666,72 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
       setTopics(renderState.topics);
 
       if (renderState.currentFrame && renderState.currentFrame.length > 0) {
-        setMessage(renderState.currentFrame[renderState.currentFrame.length - 1] as WrenchMessageEvent);
+        // Process frame messages
+        const newTfMessages: TFMessageEvent[] = [];
+        
+        renderState.currentFrame.forEach(frameMsg => {
+          const topic = frameMsg.topic;
+          
+          // Process TF messages
+          if (tfTopics.some(t => t.name === topic)) {
+            newTfMessages.push(frameMsg as TFMessageEvent);
+          }
+          
+          // Process WrenchStamped message for the selected topic
+          if (topic === state.data.topic) {
+            const wrenchMsg = frameMsg as WrenchStampedMessageEvent;
+            setMessage(wrenchMsg);
+            setSensorFrameId(wrenchMsg.message.header.frame_id);
+          }
+        });
+        
+        if (newTfMessages.length > 0) {
+          updateTFTree(newTfMessages);
+          // setTfMessages(newTfMessages);
+        }
       }
     };
 
     context.watch("topics");
     context.watch("currentFrame");
-  }, [context]);
+  }, [context, state.data.topic, tfTopics, updateTFTree]);
 
   // Call render done function
   useEffect(() => {
     renderDone?.();
   }, [renderDone]);
 
+  // Helper to render force/torque data
+  const renderWrenchData = () => {
+    if (!message) return null;
+    
+    const { force, torque } = message.message.wrench;
+    const frameId = message.message.header.frame_id;
+    
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: "8px", fontSize: "12px", marginTop: "8px" }}>
+        <div>
+          <strong>Frame ID:</strong> {frameId}
+        </div>
+        <div style={{ display: "flex", gap: "16px" }}>
+          <div>
+            <strong>Force:</strong>{" "}
+            ({force.x.toFixed(3)}, {force.y.toFixed(3)}, {force.z.toFixed(3)})
+          </div>
+          <div>
+            <strong>Torque:</strong>{" "}
+            ({torque.x.toFixed(3)}, {torque.y.toFixed(3)}, {torque.z.toFixed(3)})
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ padding: "1rem", borderBottom: "1px solid #333" }}>
-        <h2 style={{ margin: 0 }}>{state.data.topic ?? "Select a Wrench topic in settings"}</h2>
-        {message && (
-          <div style={{ display: "flex", gap: "16px", fontSize: "12px", marginTop: "8px" }}>
-            <div>
-              <strong>Force:</strong>{" "}
-              ({message.message.force.x.toFixed(3)}, {message.message.force.y.toFixed(3)}, {message.message.force.z.toFixed(3)})
-            </div>
-            <div>
-              <strong>Torque:</strong>{" "}
-              ({message.message.torque.x.toFixed(3)}, {message.message.torque.y.toFixed(3)}, {message.message.torque.z.toFixed(3)})
-            </div>
-          </div>
-        )}
+        <h2 style={{ margin: 0 }}>{state.data.topic ?? "Select a WrenchStamped topic in settings"}</h2>
+        {renderWrenchData()}
       </div>
       <div style={{ flex: 1, position: "relative" }}>
         <canvas
