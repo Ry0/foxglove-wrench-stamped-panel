@@ -122,7 +122,7 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
         torqueColor: initialState?.display?.torqueColor ?? "#ffff00",
         gridVisible: initialState?.display?.gridVisible ?? true,
         axesVisible: initialState?.display?.axesVisible ?? true,
-        gridColor: initialState?.display?.gridColor ?? "#3666a1", // 追加: デフォルトのグリッド色
+        gridColor: initialState?.display?.gridColor ?? "#3791ff",
       }
     };
   });
@@ -604,11 +604,13 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
               label: "Force Color",
               input: "rgb",
               value: state.display.forceColor,
+              hideClearButton: true,
             },
             torqueColor: {
               label: "Torque Color",
               input: "rgb",
               value: state.display.torqueColor,
+              hideClearButton: true,
             },
             gridVisible: {
               label: "Show Grid",
@@ -624,6 +626,7 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
               label: "Grid Color",
               input: "rgb",
               value: state.display.gridColor,
+              hideClearButton: true,
             },
           },
         },
