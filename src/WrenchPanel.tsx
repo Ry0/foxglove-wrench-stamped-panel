@@ -98,6 +98,7 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
   const forceArrowRef = useRef<THREE.ArrowHelper | null>(null);
   const torqueArrowRef = useRef<THREE.ArrowHelper | null>(null);
   const sensorGroupRef = useRef<THREE.Group | null>(null);
+  const torqueRotationIndicatorRef = useRef<THREE.Group | null>(null);
   const animationFrameRef = useRef<number>(0);
 
   // Restore state from layout
@@ -422,6 +423,15 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
     sensorGroup.add(torqueArrow);
     torqueArrowRef.current = torqueArrow;
 
+    const torqueRotationIndicator = createTorqueRotationIndicator(
+      new THREE.Vector3(0, 1, 0),
+      0.5, // 半径
+      parseInt(state.display.torqueColor.substring(1), 16)
+    );
+    torqueRotationIndicator.visible = state.display.showTorque;
+    sensorGroup.add(torqueRotationIndicator);
+    torqueRotationIndicatorRef.current = torqueRotationIndicator;
+
     // Add a small coordinate axes at sensor position
     const sensorAxes = new THREE.AxesHelper(0.3);
     sensorGroup.add(sensorAxes);
@@ -460,7 +470,7 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
 
   // Update arrows based on message
   const updateArrows = useCallback(() => {
-    if (!forceArrowRef.current || !torqueArrowRef.current || !message) return;
+    if (!forceArrowRef.current || !torqueArrowRef.current || !torqueRotationIndicatorRef.current || !message) return;
 
     const { force, torque } = message.message.wrench;
     
@@ -489,10 +499,28 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
         torqueLength * state.display.torqueScaleFactor * 0.2,
         torqueLength * state.display.torqueScaleFactor * 0.1
       );
+      
+      // 追加: トルク回転インジケーターを更新
+      // 古いインジケーターを削除
+      if (torqueRotationIndicatorRef.current.parent) {
+        torqueRotationIndicatorRef.current.parent.remove(torqueRotationIndicatorRef.current);
+      }
+      
+      // 新しいインジケーターを作成
+      const radius = torqueLength * state.display.torqueScaleFactor * 0.15;
+      const newIndicator = createTorqueRotationIndicator(
+        torqueVector,
+        radius,
+        parseInt(state.display.torqueColor.substring(1), 16)
+      );
+      newIndicator.visible = state.display.showTorque;
+      sensorGroupRef.current?.add(newIndicator);
+      torqueRotationIndicatorRef.current = newIndicator;
     }
     torqueArrowRef.current.visible = state.display.showTorque;
+    torqueRotationIndicatorRef.current.visible = state.display.showTorque;
   }, [message, state.display.showForce, state.display.showTorque, state.display.forceScaleFactor, state.display.torqueScaleFactor]);
-
+  
   // Resize handler
   const handleResize = useCallback(() => {
     if (!canvasRef.current || !rendererRef.current || !cameraRef.current) return;
@@ -751,4 +779,40 @@ export function initExamplePanel(context: PanelExtensionContext): () => void {
   return () => {
     root.unmount();
   };
+}
+
+function createTorqueRotationIndicator(direction: any, radius: any, color: any) {
+  const group = new THREE.Group();
+  
+  // 回転方向を表すトーラス（円弧）の作成
+  const torusGeometry = new THREE.TorusGeometry(radius, radius * 0.05, 8, 24, Math.PI * 1.5);
+  const torusMaterial = new THREE.MeshBasicMaterial({ color });
+  const torus = new THREE.Mesh(torusGeometry, torusMaterial);
+  
+  // 回転方向に合わせてトーラスを回転
+  // まずトーラスの軸をtorqueVectorに合わせる
+  const normalAxis = new THREE.Vector3(0, 0, 1);
+  const rotationAxis = new THREE.Vector3();
+  rotationAxis.crossVectors(normalAxis, direction);
+  
+  if (rotationAxis.length() > 0.001) {
+    // direction ベクトルとZ軸が一致していない場合
+    const angle = normalAxis.angleTo(direction);
+    torus.quaternion.setFromAxisAngle(rotationAxis.normalize(), angle);
+  }
+  
+  // 矢印の先端を作成（回転方向を示す）
+  const arrowHeadGeometry = new THREE.ConeGeometry(radius * 0.15, radius * 0.3, 8);
+  const arrowHeadMaterial = new THREE.MeshBasicMaterial({ color });
+  const arrowHead = new THREE.Mesh(arrowHeadGeometry, arrowHeadMaterial);
+  
+  // 矢印の先端をトーラスの端に配置し、適切な方向に向ける
+  arrowHead.position.set(radius, 0, 0);
+  arrowHead.rotation.z = -Math.PI / 4;
+  
+  // グループに追加して位置調整
+  group.add(torus);
+  group.add(arrowHead);
+  
+  return group;
 }
