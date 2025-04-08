@@ -781,38 +781,65 @@ export function initExamplePanel(context: PanelExtensionContext): () => void {
   };
 }
 
-function createTorqueRotationIndicator(direction: any, radius: any, color: any) {
+function createTorqueRotationIndicator(direction:any, radius:any, color:any) {
   const group = new THREE.Group();
   
-  // 回転方向を表すトーラス（円弧）の作成
+  // Normalize the direction vector
+  const normalizedDir = new THREE.Vector3().copy(direction).normalize();
+  
+  // Create a torus (circular arc) to show rotation direction
   const torusGeometry = new THREE.TorusGeometry(radius, radius * 0.05, 8, 24, Math.PI * 1.5);
   const torusMaterial = new THREE.MeshBasicMaterial({ color });
   const torus = new THREE.Mesh(torusGeometry, torusMaterial);
   
-  // 回転方向に合わせてトーラスを回転
-  // まずトーラスの軸をtorqueVectorに合わせる
+  // Orient the torus to align with the direction vector
+  // First find the rotation from Z-axis to our direction vector
   const normalAxis = new THREE.Vector3(0, 0, 1);
-  const rotationAxis = new THREE.Vector3();
-  rotationAxis.crossVectors(normalAxis, direction);
+  const rotationAxis = new THREE.Vector3().crossVectors(normalAxis, normalizedDir);
   
   if (rotationAxis.length() > 0.001) {
-    // direction ベクトルとZ軸が一致していない場合
-    const angle = normalAxis.angleTo(direction);
+    // If direction isn't aligned with Z-axis
+    const angle = normalAxis.angleTo(normalizedDir);
     torus.quaternion.setFromAxisAngle(rotationAxis.normalize(), angle);
   }
   
-  // 矢印の先端を作成（回転方向を示す）
+  group.add(torus);
+  
+  // Create arrow head to show rotation direction
   const arrowHeadGeometry = new THREE.ConeGeometry(radius * 0.15, radius * 0.3, 8);
   const arrowHeadMaterial = new THREE.MeshBasicMaterial({ color });
   const arrowHead = new THREE.Mesh(arrowHeadGeometry, arrowHeadMaterial);
   
-  // 矢印の先端をトーラスの端に配置し、適切な方向に向ける
-  arrowHead.position.set(radius, 0, 0);
-  arrowHead.rotation.z = -Math.PI / 4;
+  // Position the arrow at the end of the torus arc
+  // The torus arc ends at angle -Math.PI/4 from the starting angle
+  const endAngle = -Math.PI/2;
+  arrowHead.position.set(
+    radius * Math.cos(endAngle),
+    radius * Math.sin(endAngle),
+    0
+  );
   
-  // グループに追加して位置調整
-  group.add(torus);
-  group.add(arrowHead);
+  // Orient the arrow head tangent to the torus at the end point
+  // The tangent is perpendicular to the radius at that point
+  const tangentAngle = endAngle + Math.PI/2;
+  const tangentDir = new THREE.Vector3(
+    Math.cos(tangentAngle),
+    Math.sin(tangentAngle),
+    0
+  );
+  
+  // Align arrow with the tangent direction
+  const arrowDir = new THREE.Vector3(0, 1, 0); // Arrow's default direction
+  arrowHead.quaternion.setFromUnitVectors(arrowDir, tangentDir);
+  
+  // Add the arrow head to a separate group so we can apply the same rotation as the torus
+  const arrowGroup = new THREE.Group();
+  arrowGroup.add(arrowHead);
+  
+  // Apply the same rotation as the torus to maintain alignment
+  arrowGroup.quaternion.copy(torus.quaternion);
+  
+  group.add(arrowGroup);
   
   return group;
 }
