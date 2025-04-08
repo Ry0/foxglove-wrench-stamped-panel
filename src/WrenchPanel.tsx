@@ -80,6 +80,7 @@ type PanelState = {
     torqueColor: string;
     gridVisible: boolean;
     axesVisible: boolean;
+    gridColor: string;
   };
 };
 
@@ -100,6 +101,7 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
   const sensorGroupRef = useRef<THREE.Group | null>(null);
   const torqueRotationIndicatorRef = useRef<THREE.Group | null>(null);
   const animationFrameRef = useRef<number>(0);
+  const gridHelperRef = useRef<THREE.GridHelper | null>(null);
 
   // Restore state from layout
   const [state, setState] = useState<PanelState>(() => {
@@ -117,9 +119,10 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
         forceScaleFactor: initialState?.display?.forceScaleFactor ?? 1.0,
         torqueScaleFactor: initialState?.display?.torqueScaleFactor ?? 1.0,
         forceColor: initialState?.display?.forceColor ?? "#ff0000",
-        torqueColor: initialState?.display?.torqueColor ?? "#0000ff",
+        torqueColor: initialState?.display?.torqueColor ?? "#ffff00",
         gridVisible: initialState?.display?.gridVisible ?? true,
         axesVisible: initialState?.display?.axesVisible ?? true,
+        gridColor: initialState?.display?.gridColor ?? "#3666a1", // 追加: デフォルトのグリッド色
       }
     };
   });
@@ -382,10 +385,12 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
     controlsRef.current = controls;
 
     // Add grid
-    const gridHelper = new THREE.GridHelper(10, 10);
+    const gridColor = parseInt(state.display.gridColor.substring(1), 16);
+    const gridHelper = new THREE.GridHelper(10, 10, gridColor, gridColor);
     gridHelper.rotation.x = Math.PI / 2; // X軸まわりに90度回転
     gridHelper.visible = state.display.gridVisible;
     scene.add(gridHelper);
+    gridHelperRef.current = gridHelper;
 
     // Add axes
     const axesHelper = new THREE.AxesHelper(1);
@@ -615,6 +620,11 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
               input: "boolean",
               value: state.display.axesVisible,
             },
+            gridColor: {
+              label: "Grid Color",
+              input: "rgb",
+              value: state.display.gridColor,
+            },
           },
         },
       },
@@ -688,6 +698,22 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
       }));
     }
   }, [state.data.topic, wrenchStampedTopics]);
+
+  useEffect(() => {
+    if (!sceneRef.current || !gridHelperRef.current) return;
+  
+    // 古いグリッドを削除
+    sceneRef.current.remove(gridHelperRef.current);
+    
+    // 新しいグリッドを作成して追加
+    const gridColor = parseInt(state.display.gridColor.substring(1), 16);
+    const newGridHelper = new THREE.GridHelper(10, 10, gridColor, gridColor);
+    newGridHelper.rotation.x = Math.PI / 2;
+    newGridHelper.visible = state.display.gridVisible;
+    sceneRef.current.add(newGridHelper);
+    gridHelperRef.current = newGridHelper;
+    
+  }, [state.display.gridColor]);
 
   // Setup render callback
   useLayoutEffect(() => {
@@ -791,7 +817,7 @@ function createTorqueRotationIndicator(direction:any, distance:any, radius:any, 
   
   // Create a torus (circular arc) to show rotation direction
   const arcAngle = Math.PI * 1.5; // 270 degrees
-  const torusGeometry = new THREE.TorusGeometry(radius, radius * 0.05, 8, 24, arcAngle);
+  const torusGeometry = new THREE.TorusGeometry(radius, radius * 0.015, 8, 24, arcAngle);
   const torusMaterial = new THREE.MeshBasicMaterial({ color });
   const torus = new THREE.Mesh(torusGeometry, torusMaterial);
   
