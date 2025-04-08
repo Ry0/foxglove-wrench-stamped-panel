@@ -425,6 +425,7 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
 
     const torqueRotationIndicator = createTorqueRotationIndicator(
       new THREE.Vector3(0, 1, 0),
+      state.display.torqueScaleFactor,
       0.5, // 半径
       parseInt(state.display.torqueColor.substring(1), 16)
     );
@@ -510,6 +511,7 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
       const radius = torqueLength * state.display.torqueScaleFactor * 0.15;
       const newIndicator = createTorqueRotationIndicator(
         torqueVector,
+        torqueLength * state.display.torqueScaleFactor,
         radius,
         parseInt(state.display.torqueColor.substring(1), 16)
       );
@@ -781,19 +783,22 @@ export function initExamplePanel(context: PanelExtensionContext): () => void {
   };
 }
 
-function createTorqueRotationIndicator(direction:any, radius:any, color:any) {
+function createTorqueRotationIndicator(direction:any, distance:any, radius:any, color:any) {
   const group = new THREE.Group();
   
   // Normalize the direction vector
   const normalizedDir = new THREE.Vector3().copy(direction).normalize();
   
   // Create a torus (circular arc) to show rotation direction
-  const torusGeometry = new THREE.TorusGeometry(radius, radius * 0.05, 8, 24, Math.PI * 1.5);
+  const arcAngle = Math.PI * 1.5; // 270 degrees
+  const torusGeometry = new THREE.TorusGeometry(radius, radius * 0.05, 8, 24, arcAngle);
   const torusMaterial = new THREE.MeshBasicMaterial({ color });
   const torus = new THREE.Mesh(torusGeometry, torusMaterial);
   
+  // Create a base group for positioning the entire indicator along the direction vector
+  const positionedGroup = new THREE.Group();
+  
   // Orient the torus to align with the direction vector
-  // First find the rotation from Z-axis to our direction vector
   const normalAxis = new THREE.Vector3(0, 0, 1);
   const rotationAxis = new THREE.Vector3().crossVectors(normalAxis, normalizedDir);
   
@@ -803,7 +808,10 @@ function createTorqueRotationIndicator(direction:any, radius:any, color:any) {
     torus.quaternion.setFromAxisAngle(rotationAxis.normalize(), angle);
   }
   
-  group.add(torus);
+  positionedGroup.add(torus);
+  
+  // Calculate the end point of the torus arc
+  const endAngle = -Math.PI/2; // End angle of the arc
   
   // Create arrow head to show rotation direction
   const arrowHeadGeometry = new THREE.ConeGeometry(radius * 0.15, radius * 0.3, 8);
@@ -811,8 +819,6 @@ function createTorqueRotationIndicator(direction:any, radius:any, color:any) {
   const arrowHead = new THREE.Mesh(arrowHeadGeometry, arrowHeadMaterial);
   
   // Position the arrow at the end of the torus arc
-  // The torus arc ends at angle -Math.PI/4 from the starting angle
-  const endAngle = -Math.PI/2;
   arrowHead.position.set(
     radius * Math.cos(endAngle),
     radius * Math.sin(endAngle),
@@ -820,7 +826,6 @@ function createTorqueRotationIndicator(direction:any, radius:any, color:any) {
   );
   
   // Orient the arrow head tangent to the torus at the end point
-  // The tangent is perpendicular to the radius at that point
   const tangentAngle = endAngle + Math.PI/2;
   const tangentDir = new THREE.Vector3(
     Math.cos(tangentAngle),
@@ -828,18 +833,35 @@ function createTorqueRotationIndicator(direction:any, radius:any, color:any) {
     0
   );
   
-  // Align arrow with the tangent direction
-  const arrowDir = new THREE.Vector3(0, 1, 0); // Arrow's default direction
+  // Create a temporary vector to represent the default cone direction
+  const arrowDir = new THREE.Vector3(0, 1, 0);
+  
+  // Set quaternion to rotate from default direction to tangent direction
   arrowHead.quaternion.setFromUnitVectors(arrowDir, tangentDir);
   
-  // Add the arrow head to a separate group so we can apply the same rotation as the torus
+  // Move the cone back a bit so its base aligns with the torus end
+  const coneBaseOffset = radius * 0.15; // Adjust based on cone dimensions
+  arrowHead.position.x -= tangentDir.x * coneBaseOffset;
+  arrowHead.position.y -= tangentDir.y * coneBaseOffset;
+  
+  // Add the arrow to the positioned group and copy the torus rotation
   const arrowGroup = new THREE.Group();
   arrowGroup.add(arrowHead);
-  
-  // Apply the same rotation as the torus to maintain alignment
   arrowGroup.quaternion.copy(torus.quaternion);
+  positionedGroup.add(arrowGroup);
   
-  group.add(arrowGroup);
+  // Move the entire indicator along the direction vector
+  // Position it at a distance from the origin in the direction vector
+  // const offsetDistance = radius * 0.5; // Adjust this value as needed
+  const offsetDistance = distance * 0.25;
+  const offsetPosition = new THREE.Vector3()
+    .copy(normalizedDir)
+    .multiplyScalar(offsetDistance);
+  
+  positionedGroup.position.copy(offsetPosition);
+  
+  // Add the positioned group to the main group
+  group.add(positionedGroup);
   
   return group;
 }
