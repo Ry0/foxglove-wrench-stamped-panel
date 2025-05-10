@@ -1,4 +1,4 @@
-# kabu.wrench-panel version history
+# kabu.wrench-stamped-panel version history
 
 ## 1.0.0
 

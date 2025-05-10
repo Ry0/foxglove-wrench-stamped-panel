@@ -1,9 +1,9 @@
 {
-  "name": "kabu.wrench-panel",
-  "displayName": "Wrench Panel",
-  "description": "This extension displays the string data of geometry_msgs/Wrench.msg or geometry_msgs/msg/Wrench.msg on the panel.",
+  "name": "kabu.wrench-stamped-panel",
+  "displayName": "WrenchStamped Panel",
+  "description": "This extension displays the string data of geometry_msgs/WrenchStamped.msg or geometry_msgs/msg/WrenchStamped.msg on the panel.",
   "publisher": "Ryo Kabutan",
-  "homepage": "https://github.com/Ry0/foxglove-wrench-panel",
+  "homepage": "https://github.com/Ry0/foxglove-wrench-stamped-panel",
   "version": "1.0.0",
   "license": "MIT",
   "main": "./dist/extension.js",
