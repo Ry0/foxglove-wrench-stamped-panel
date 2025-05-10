@@ -1,7 +1,7 @@
 import { ExtensionContext } from "@foxglove/extension";
 
-import { initExamplePanel } from "./WrenchPanel";
+import { initExamplePanel } from "./WrenchStampedPanel";
 
 export function activate(extensionContext: ExtensionContext): void {
-  extensionContext.registerPanel({ name: "Wrench ", initPanel: initExamplePanel });
+  extensionContext.registerPanel({ name: "WrenchStamped ", initPanel: initExamplePanel });
 }

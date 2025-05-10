@@ -87,7 +87,6 @@ type PanelState = {
 function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Element {
   const [topics, setTopics] = useState<readonly Topic[] | undefined>();
   const [message, setMessage] = useState<WrenchStampedMessageEvent>();
-  // const [tfMessages, setTfMessages] = useState<TFMessageEvent[]>([]);
   const [sensorFrameId, setSensorFrameId] = useState<string>("");
   const [tfTree, setTfTree] = useState<Map<string, TFTreeNode>>(new Map());
   const [renderDone, setRenderDone] = useState<(() => void) | undefined>();
@@ -108,7 +107,7 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
     const initialState = context.initialState as Partial<PanelState>;
     return { 
       data: {
-        label: initialState?.data?.label ?? "Wrench Visualization",
+        label: initialState?.data?.label ?? "WrenchStamped Visualization",
         topic: initialState?.data?.topic,
         visible: initialState?.data?.visible ?? true,
         fixedFrame: initialState?.data?.fixedFrame ?? "world",
@@ -352,31 +351,39 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
   const setupScene = useCallback(() => {
     if (!canvasRef.current) return;
 
+    // Use size of parent element
+    const width = canvasRef.current.parentElement?.clientWidth || canvasRef.current.clientWidth;
+    const height = canvasRef.current.parentElement?.clientHeight || canvasRef.current.clientHeight;
+
+    // Explicitly set canvas size
+    canvasRef.current.width = width;
+    canvasRef.current.height = height;
+
     // Create renderer
     const renderer = new THREE.WebGLRenderer({
       canvas: canvasRef.current,
       antialias: true,
       alpha: true,
     });
-    renderer.setSize(canvasRef.current.clientWidth, canvasRef.current.clientHeight);
+    renderer.setSize(width, height, false);
     renderer.setPixelRatio(window.devicePixelRatio);
     rendererRef.current = renderer;
 
-    // Create scene
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x121217);
-    sceneRef.current = scene;
-
-    // Create camera
+    // Create camera with correct aspect ratio
     const camera = new THREE.PerspectiveCamera(
       75,
-      canvasRef.current.clientWidth / canvasRef.current.clientHeight,
+      width / height,
       0.1,
       1000
     );
     camera.position.set(2, 2, 2);
     camera.lookAt(0, 0, 0);
     cameraRef.current = camera;
+
+    // Create scene
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x121217);
+    sceneRef.current = scene;
 
     // Add controls
     const controls = new OrbitControls(camera, canvasRef.current);
@@ -387,7 +394,7 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
     // Add grid
     const gridColor = parseInt(state.display.gridColor.substring(1), 16);
     const gridHelper = new THREE.GridHelper(10, 10, gridColor, gridColor);
-    gridHelper.rotation.x = Math.PI / 2; // X軸まわりに90度回転
+    gridHelper.rotation.x = Math.PI / 2; // 90 degree rotation around X axis
     gridHelper.visible = state.display.gridVisible;
     scene.add(gridHelper);
     gridHelperRef.current = gridHelper;
@@ -431,7 +438,7 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
     const torqueRotationIndicator = createTorqueRotationIndicator(
       new THREE.Vector3(0, 1, 0),
       state.display.torqueScaleFactor,
-      0.5, // 半径
+      0.5, // radius
       parseInt(state.display.torqueColor.substring(1), 16)
     );
     torqueRotationIndicator.visible = state.display.showTorque;
@@ -506,13 +513,12 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
         torqueLength * state.display.torqueScaleFactor * 0.1
       );
       
-      // 追加: トルク回転インジケーターを更新
-      // 古いインジケーターを削除
+      // Remove old indicator
       if (torqueRotationIndicatorRef.current.parent) {
         torqueRotationIndicatorRef.current.parent.remove(torqueRotationIndicatorRef.current);
       }
       
-      // 新しいインジケーターを作成
+      // Create a new indicator
       const radius = torqueLength * state.display.torqueScaleFactor * 0.15;
       const newIndicator = createTorqueRotationIndicator(
         torqueVector,
@@ -532,14 +538,21 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
   const handleResize = useCallback(() => {
     if (!canvasRef.current || !rendererRef.current || !cameraRef.current) return;
     
-    const width = canvasRef.current.clientWidth;
-    const height = canvasRef.current.clientHeight;
+    // Get the size of the parent container
+    const width = canvasRef.current.parentElement?.clientWidth || canvasRef.current.clientWidth;
+    const height = canvasRef.current.parentElement?.clientHeight || canvasRef.current.clientHeight;
     
+    // Update canvas size
+    canvasRef.current.width = width;
+    canvasRef.current.height = height;
+    
+    // Updated renderer resolution and size
+    rendererRef.current.setSize(width, height, false); // preserveDrawingBuffer is false
+    
+    // Updated camera aspect ratio
     cameraRef.current.aspect = width / height;
     cameraRef.current.updateProjectionMatrix();
-    rendererRef.current.setSize(width, height);
   }, []);
-
   // Update settings editor
   useEffect(() => {
     context.saveState(state);
@@ -639,16 +652,28 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
     setupScene();
     window.addEventListener("resize", handleResize);
     
+    // Detect panel element resizing
+    const resizeObserver = new ResizeObserver(() => {
+      handleResize();
+    });
+    
+    // パネル要素を監視
+    if (canvasRef.current?.parentElement) {
+      resizeObserver.observe(canvasRef.current.parentElement);
+    }
+    
     return () => {
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
       window.removeEventListener("resize", handleResize);
+      resizeObserver.disconnect();
       if (rendererRef.current) {
         rendererRef.current.dispose();
       }
     };
   }, [setupScene, handleResize]);
+
 
   // Update visualization when message or settings change
   useEffect(() => {
@@ -705,10 +730,8 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
   useEffect(() => {
     if (!sceneRef.current || !gridHelperRef.current) return;
   
-    // 古いグリッドを削除
     sceneRef.current.remove(gridHelperRef.current);
     
-    // 新しいグリッドを作成して追加
     const gridColor = parseInt(state.display.gridColor.substring(1), 16);
     const newGridHelper = new THREE.GridHelper(10, 10, gridColor, gridColor);
     newGridHelper.rotation.x = Math.PI / 2;
@@ -723,6 +746,21 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
     context.onRender = (renderState, done) => {
       setRenderDone(() => done);
       setTopics(renderState.topics);
+      
+      // Perform size checks (if necessary)
+      if (canvasRef.current && rendererRef.current) {
+        const parent = canvasRef.current.parentElement;
+        if (parent) {
+          const currentWidth = parent.clientWidth;
+          const currentHeight = parent.clientHeight;
+          
+          // Resize renderer if its size is different from the parent element
+          const rendererSize = rendererRef.current.getSize(new THREE.Vector2());
+          if (rendererSize.width !== currentWidth || rendererSize.height !== currentHeight) {
+            handleResize();
+          }
+        }
+      }
 
       if (renderState.currentFrame && renderState.currentFrame.length > 0) {
         // Process frame messages
@@ -753,7 +791,7 @@ function WrenchPanel({ context }: { context: PanelExtensionContext }): JSX.Eleme
 
     context.watch("topics");
     context.watch("currentFrame");
-  }, [context, state.data.topic, tfTopics, updateTFTree]);
+  }, [context, state.data.topic, tfTopics, updateTFTree, handleResize]);
 
   // Call render done function
   useEffect(() => {
