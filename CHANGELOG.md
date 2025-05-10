@@ -2,6 +2,5 @@
 
 ## 1.0.0
 
-* Selection of text topics
-* Font size adjustment
-* Customization of background and font colors
+* Force and torque display supported.
+* The origin of the vector also moves as the TF is updated.
